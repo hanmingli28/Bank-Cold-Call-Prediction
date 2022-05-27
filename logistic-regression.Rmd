@@ -1,0 +1,132 @@
+---
+title: "logistic-regression"
+author: "Zheyuan Hu"
+date: '2022-04-24'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(gam)
+library(pROC)
+library(fmsb)
+library(rms)
+library(superml)
+library(InformationValue)
+library(Information)
+library(klaR)
+library(tree)
+library(randomForest)
+library(ranger)
+library(rpart)
+library(rattle)
+library(visNetwork)
+
+set.seed(56)
+df <- read.csv('bank-additional-full.csv', stringsAsFactors = T)
+df <- subset(df, select = -c(default))
+## change all of the binary variables to 0-1
+df$y <- ifelse(df$y == 'yes', 1, 0)
+df$contact <- ifelse(df$contact == 'telephone', 1, 0)
+df$contact <- as.factor(df$contact)
+
+## change the month and weekday to number
+df$month <- factor(df$month, levels = c('jan', 'feb', 'mar', 'apr', 'may', 
+                                        'jun', 'jul', 'aug', 'sep', 'oct',
+                                        'nov', 'dec'))
+df$month <- as.numeric(df$month)
+df$day_of_week <- factor(df$day_of_week, levels = c('mon', 'tue', 'wed',
+                                                    'thu', 'fri'))
+df$day_of_week <- as.numeric(df$day_of_week)
+## for education part, the levels of education is sequential. A good way to deal
+## with this kind of variable is using WOE.
+## reorder the education level(unknown here is assigned with 1)
+df$education <- factor(df$education,
+                           levels = c('unknown', 'illiterate', 'basic.4y',
+                                      'basic.6y', 'basic.9y', 'high.school',
+                                      'professional.course', 
+                                      'university.degree'))
+df$education <- as.numeric(df$education)
+## Information value table
+## Higher the IV, better the predictor is.
+iv_table <- create_infotables(data = df, y = 'y', bins = 10)
+
+#### write a function, bin the continuous variable and then, assign the WOE
+bin_woe <- function(var_name, data){
+  temp <- data[order(data[,var_name]),]
+  bin_tab <- as.data.frame(iv_table$Tables[var_name])
+  row_start <- 1
+  row_end <- 0
+  for(i in 1:nrow(bin_tab)){
+    row_end <- row_end + bin_tab[i,2]
+    temp[row_start:row_end, var_name] <- bin_tab[i,4]
+    row_start <- row_start + bin_tab[i,2]
+  }
+  return(temp)
+}
+
+select_variables <- iv_table$Summary[iv_table$Summary$IV > 0.1, 1]
+select_variables <- c(select_variables, 'y')
+df_good_pred <- df[,select_variables]
+
+df_woe <- bin_woe('age', df_good_pred)
+df_woe <- bin_woe('pdays', df_woe)
+df_woe <- bin_woe('duration', df_woe)
+df_woe <- bin_woe('previous', df_woe)
+df_woe <- bin_woe('nr.employed', df_woe)
+df_woe <- bin_woe('emp.var.rate', df_woe)
+df_woe <- bin_woe('euribor3m', df_woe)
+#df_woe <- bin_woe('cons.conf.idx', df_woe)
+#df_woe <- bin_woe('month', df_woe)
+
+## for woe transformed data
+df_woe$y <- as.factor(df_woe$y)
+train_ind_woe <- createDataPartition(df_woe$y, p = 0.8, list = F)
+train_set_woe <- df_woe[train_ind_woe, ]
+test_set_woe <- df_woe[-train_ind_woe, ]
+## balance the training data set
+n_pos <- nrow(df_woe[df_woe$y == 1,])
+train_neg_woe <- train_set_woe[train_set_woe$y == 0,]
+train_bal_ind_woe <- sample(nrow(train_neg_woe), n_pos*1)
+train_neg_set_woe <- train_neg_woe[train_bal_ind_woe,]
+train_pos_set_woe <- train_set_woe[train_set_woe$y == 1,]
+train_set_bal_woe <- rbind(train_pos_set_woe, train_neg_set_woe)
+
+ctrl <- trainControl(method = "cv", number = 10)
+## for woe transformed data
+cv_lr_w <- train(form = y~., data = train_set_bal_woe,
+               method = "glm", family = 'binomial', trControl = ctrl)
+cv_lr_w$results
+
+## for woe transformed data
+cv_pred2 <- predict(cv_lr_w, test_set_woe, type = 'raw')
+cm_woe <- caret::confusionMatrix(factor(cv_pred2), factor(test_set_woe$y), 
+                                 dnn = c("Prediction", "Reference"))
+roc_lr_w <- pROC::roc(test_set_woe$y~predict(cv_lr_w, test_set_woe, 
+                                             type = 'prob')[,1], plot = F,
+                                            print.auc = T)
+cm_woe
+roc_lr_w$auc
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

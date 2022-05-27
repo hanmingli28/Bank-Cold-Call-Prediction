@@ -1,0 +1,115 @@
+---
+title: "ANLY512_proj_tree"
+author: "Jiaqi Song"
+date: "4/22/2022"
+output: html_document
+---
+
+```{r}
+library(caret)
+library(pROC)
+library(tree)
+library(rpart)
+library(rattle)
+library(visNetwork)
+```
+
+```{r}
+# Read the dataset
+bank = read.csv("archive/bank-additional-full.csv")
+```
+
+```{r}
+# Check the data
+dim(bank) # 41188 21
+head(bank)
+```
+
+```{r}
+bank$y[bank$y=="yes"] = 1
+bank$y[bank$y=="no"] = 0
+head(bank)
+```
+
+```{r}
+# Check the columns in chr type and tranform them into factor
+bank.types = sapply(bank, class)
+chr.names = names(bank.types[bank.types=="character"])
+for (c in chr.names) {
+  print(c)
+  print(table(bank[c]))
+  bank[,c] = as.factor(bank[,c])
+}
+
+head(bank)
+```
+
+```{r}
+set.seed(1020)
+
+# Split the dataset by the y value
+bank.yes = bank[bank$y == 1,] 
+bank.no = bank[bank$y == 0,]
+
+# Compute the count
+n.yes = nrow(bank.yes)
+n.no = nrow(bank.no)
+
+# Undersampling 1:9 to 1:4
+samples.no = sample(1:n.no, n.yes)
+bank.no.new = bank.no[samples.no,]
+
+# Make a new df
+df = rbind(bank.yes, bank.no.new)
+n.df = nrow(df)
+samples.df = sample(1:n.df, n.df)
+df = df[samples.df,]
+
+```
+
+```{r}
+# Split the dataset
+set.seed(2010)
+n <- nrow(df)
+samples = sample(1:n, 0.8*n)
+train = df[samples,]
+test = df[-samples,]
+```
+
+```{r}
+# Fit a tree
+cv.rp = rpart(y~., data=train, method="class")
+plotcp(cv.rp)
+
+# Find the best value of cp
+min_cp = cv.rp$cptable[which.min(cv.rp$cptable[,"xerror"]), 'CP']
+min_cp
+
+# Pruning tree using best cp
+tree.rp = prune(cv.rp, cp=min_cp)
+fancyRpartPlot(tree.rp)
+```
+
+```{r}
+# Prediction on test data
+train.class = predict(tree.rp, newdata=train, type="class")
+train.prob = predict(tree.rp, newdata=train, type="prob")
+test.class = predict(tree.rp, newdata=test, type="class")
+test.prob = predict(tree.rp, newdata=test, type="prob")
+
+# Training Confussion Matrix
+confusionMatrix(train.class, train$y)
+confusionMatrix(test.class, test$y)
+
+# ROC
+train.roc = pROC::roc(train$y~train.prob[,2], plot = T, print.auc = T)
+test.roc = pROC::roc(test$y~test.prob[,2], plot = T, print.auc = T)
+
+# AUC
+train.roc$auc
+test.roc$auc
+```
+
+
+
+

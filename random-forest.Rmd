@@ -1,0 +1,122 @@
+---
+title: "anly512-project-random-forest"
+author: "Hanming Li"
+date: "2022/4/22"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(tree)
+library(randomForest)
+library(caret)
+library(ranger)
+library(pROC)
+library(car)
+```
+
+```{r}
+fData <- read.csv("./data/bank-additional-full.csv")
+sData <- read.csv("./data/bank-additional.csv")
+bsData <- read.csv("./data/bank-additional-balanced.csv")
+
+# head(fData)
+# nrow(fData)
+# nrow(sData)
+# nrow(bsData)
+ncol(bsData)
+glimpse(bsData)
+```
+
+# Data munging
+```{r}
+fData$job = as.factor(fData$job)
+fData$education = as.factor(fData$education)
+fData$contact = as.factor(fData$contact)
+fData$marital = as.factor(fData$marital)
+fData$default = as.factor(fData$default)
+fData$housing = as.factor(fData$housing)
+fData$loan = as.factor(fData$loan)
+fData$month = as.factor(fData$month)
+fData$day_of_week = as.factor(fData$day_of_week)
+fData$poutcome = as.factor(fData$poutcome)
+fData$y = as.factor(fData$y)
+
+table(fData$y)
+table(bsData$y)
+```
+
+# Split into training and testing sets (method 1)
+```{r}
+## 75% of the sample size
+smp_size <- floor(0.7 * nrow(fData))
+
+## set the seed to make your partition reproducible
+set.seed(2022)
+train_ind <- sample(seq_len(nrow(fData)), size = smp_size)
+
+fData.train <- fData[train_ind, ]
+fData.test <- fData[-train_ind, ]
+
+table(fData.train$y)
+table(fData.test$y)
+```
+
+# Split into training and testing sets (method 2)
+```{r}
+partition <- createDataPartition(fData$y, p = 0.7, list = FALSE)
+fData.train2 <- fData[partition, ]
+fData.test2 <- fData[-partition, ]
+
+table(fData.train2$y)
+table(fData.test2$y)
+```
+
+# Imbalanced random forest
+## Train the model 
+```{r}
+set.seed(2022)
+nvar <- round(sqrt(20))
+rf.model=randomForest(y~.,data=fData.train2,mtry=nvar,importance=TRUE)
+rf.model
+```
+
+# Examine the model 
+```{r}
+randomForest::importance(rf.model)
+randomForest::varImpPlot(rf.model)
+```
+
+## Test model accuracy
+```{r}
+yhat.rf = predict(rf.model, newdata=fData.test2, type="response")
+confusionMatrix(yhat.rf, fData.test2$y)
+test_roc_1 = roc(fData.test2$y ~ predict(rf.model, fData.test2, type="prob")[,1], plot=TRUE)
+test_roc_1$auc
+```
+
+# Balanced random forest 
+```{r}
+# Compute weights to balance the RF
+w <- 1/table(fData.train2$y)
+w <- w/sum(w)
+weights <- rep(0, nrow(fData.train2))
+weights[fData.train2$y == "yes"] <- w['yes']
+weights[fData.train2$y == "no"] <- w['no']
+table(weights, fData.train2$y)
+
+# Fit the RF
+rf.raw <- ranger(y~., data=fData.train2, case.weights=weights)
+rf.balancedModel <- ranger(y~., data=fData.train2, case.weights=weights, probability = TRUE)
+print(rf.balancedModel)
+```
+
+## Test model accuracy
+```{r}
+pred = predict(rf.raw, fData.test2, type="response")
+confusionMatrix(pred$predictions, fData.test2$y)
+test_roc_2 = roc(fData.test2$y ~ predict(rf.balancedModel, fData.test2)$prediction[,1], plot=TRUE)
+test_roc_2$auc
+```
+
+Balanced random forest model has an improved AUC ROC score as well as a greater Kappa value. The balanced model is better. 

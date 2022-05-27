@@ -1,0 +1,399 @@
+---
+title: "anly512 project"
+author: "Hanming Li"
+date: "2022/4/24"
+output: html_document
+---
+
+```{r warning=FALSE,message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(gam)
+library(pROC)
+library(fmsb)
+library(rms)
+library(superml)
+library(InformationValue)
+library(Information)
+library(klaR)
+library(tree)
+library(randomForest)
+library(ranger)
+library(rpart)
+library(rattle)
+library(visNetwork)
+```
+# Create a function that deregisters all parallel backend
+```{r}
+unregister_dopar <- function() {
+  env <- foreach:::.foreachGlobals
+  rm(list=ls(name=env), pos=env)
+}
+```
+
+# split data
+```{r}
+bank = read.csv("./data/bank-additional-full.csv")
+bank$y[bank$y=="yes"] = 1
+bank$y[bank$y=="no"] = 0
+
+# Check the columns in chr type and tranform them into factor
+bank.types = sapply(bank, class)
+chr.names = names(bank.types[bank.types=="character"])
+for (c in chr.names) {
+  print(c)
+  print(table(bank[c]))
+  bank[,c] = as.factor(bank[,c])
+}
+
+head(bank)
+
+set.seed(1020)
+
+# Split the dataset by the y value
+bank.yes = bank[bank$y == 1,] 
+bank.no = bank[bank$y == 0,]
+
+# Compute the count
+n.yes = nrow(bank.yes)
+n.no = nrow(bank.no)
+
+# Undersampling 1:9 to 1:4
+samples.no = sample(1:n.no, n.yes)
+bank.no.new = bank.no[samples.no,]
+
+# Make a new df
+df = rbind(bank.yes, bank.no.new)
+n.df = nrow(df)
+samples.df = sample(1:n.df, n.df)
+df = df[samples.df,]
+
+# Split the dataset
+set.seed(2010)
+n <- nrow(df)
+samples = sample(1:n, 0.7*n)
+train = df[samples,]
+test = df[-samples,]
+df.tree <- df
+```
+
+# Logistic regression
+```{r}
+set.seed(56)
+df <- read.csv('./data/bank-additional-full.csv', stringsAsFactors = T)
+df <- subset(df, select = -c(default))
+## change all of the binary variables to 0-1
+df$y <- ifelse(df$y == 'yes', 1, 0)
+df$contact <- ifelse(df$contact == 'telephone', 1, 0)
+df$contact <- as.factor(df$contact)
+
+## change the month and weekday to number
+df$month <- factor(df$month, levels = c('jan', 'feb', 'mar', 'apr', 'may', 
+                                        'jun', 'jul', 'aug', 'sep', 'oct',
+                                        'nov', 'dec'))
+df$month <- as.numeric(df$month)
+df$day_of_week <- factor(df$day_of_week, levels = c('mon', 'tue', 'wed',
+                                                    'thu', 'fri'))
+df$day_of_week <- as.numeric(df$day_of_week)
+## for education part, the levels of education is sequential. A good way to deal
+## with this kind of variable is using WOE.
+## reorder the education level(unknown here is assigned with 1)
+df$education <- factor(df$education,
+                           levels = c('unknown', 'illiterate', 'basic.4y',
+                                      'basic.6y', 'basic.9y', 'high.school',
+                                      'professional.course', 
+                                      'university.degree'))
+df$education <- as.numeric(df$education)
+## Information value table
+## Higher the IV, better the predictor is.
+iv_table <- create_infotables(data = df, y = 'y', bins = 10)
+
+#### write a function, bin the continuous variable and then, assign the WOE
+bin_woe <- function(var_name, data){
+  temp <- data[order(data[,var_name]),]
+  bin_tab <- as.data.frame(iv_table$Tables[var_name])
+  row_start <- 1
+  row_end <- 0
+  for(i in 1:nrow(bin_tab)){
+    row_end <- row_end + bin_tab[i,2]
+    temp[row_start:row_end, var_name] <- bin_tab[i,4]
+    row_start <- row_start + bin_tab[i,2]
+  }
+  return(temp)
+}
+
+select_variables <- iv_table$Summary[iv_table$Summary$IV > 0.1, 1]
+select_variables <- c(select_variables, 'y')
+df_good_pred <- df[,select_variables]
+
+df_woe <- bin_woe('age', df_good_pred)
+df_woe <- bin_woe('pdays', df_woe)
+df_woe <- bin_woe('duration', df_woe)
+df_woe <- bin_woe('previous', df_woe)
+df_woe <- bin_woe('nr.employed', df_woe)
+df_woe <- bin_woe('emp.var.rate', df_woe)
+df_woe <- bin_woe('euribor3m', df_woe)
+#df_woe <- bin_woe('cons.conf.idx', df_woe)
+#df_woe <- bin_woe('month', df_woe)
+
+## for woe transformed data
+df_woe$y <- as.factor(df_woe$y)
+train_ind_woe <- createDataPartition(df_woe$y, p = 0.7, list = F)
+train_set_woe <- df_woe[train_ind_woe, ]
+test_set_woe <- df_woe[-train_ind_woe, ]
+
+# Use tree data
+#################
+df_woe <- df.tree
+train_set_bal_woe <- train
+train_set_woe <- train
+test_set_woe <- test
+#################
+
+## balance the training data set
+# n_pos <- nrow(df_woe[df_woe$y == 1,])
+# train_neg_woe <- train_set_woe[train_set_woe$y == 0,]
+# train_bal_ind_woe <- sample(nrow(train_neg_woe), n_pos*1)
+# train_neg_set_woe <- train_neg_woe[train_bal_ind_woe,]
+# train_pos_set_woe <- train_set_woe[train_set_woe$y == 1,]
+# train_set_bal_woe <- rbind(train_pos_set_woe, train_neg_set_woe)
+
+ctrl <- trainControl(method = "cv", number = 10)
+## for woe transformed data
+unregister_dopar()
+cv_lr_w <- caret::train(form = y~., data = train_set_bal_woe,
+               method = "glm", family = 'binomial', trControl = ctrl)
+cv_lr_w$results
+
+## for woe transformed data
+cv_pred2 <- predict(cv_lr_w, test_set_woe, type = 'raw')
+cm_woe <- caret::confusionMatrix(factor(cv_pred2), factor(test_set_woe$y), 
+                                 dnn = c("Prediction", "Reference"))
+roc_lr_w <- pROC::roc(test_set_woe$y~predict(cv_lr_w, test_set_woe, 
+                                             type = 'prob')[,1], percent = TRUE, plot = T, print.auc = T)
+cm_woe
+roc_lr_w$auc
+```
+
+# Single tree
+```{r}
+bank = read.csv("./data/bank-additional-full.csv")
+```
+
+```{r}
+bank$y[bank$y=="yes"] = 1
+bank$y[bank$y=="no"] = 0
+
+# Check the columns in chr type and tranform them into factor
+bank.types = sapply(bank, class)
+chr.names = names(bank.types[bank.types=="character"])
+for (c in chr.names) {
+  print(c)
+  print(table(bank[c]))
+  bank[,c] = as.factor(bank[,c])
+}
+
+head(bank)
+
+set.seed(1020)
+
+# Split the dataset by the y value
+bank.yes = bank[bank$y == 1,] 
+bank.no = bank[bank$y == 0,]
+
+# Compute the count
+n.yes = nrow(bank.yes)
+n.no = nrow(bank.no)
+
+# Undersampling 1:9 to 1:4
+samples.no = sample(1:n.no, n.yes)
+bank.no.new = bank.no[samples.no,]
+
+# Make a new df
+df = rbind(bank.yes, bank.no.new)
+n.df = nrow(df)
+samples.df = sample(1:n.df, n.df)
+df = df[samples.df,]
+
+# Split the dataset
+set.seed(2010)
+n <- nrow(df)
+samples = sample(1:n, 0.7*n)
+train = df[samples,]
+test = df[-samples,]
+
+# Fit a tree
+cv.rp = rpart(y~., data=train, method="class")
+plotcp(cv.rp)
+
+# Find the best value of cp
+min_cp = cv.rp$cptable[which.min(cv.rp$cptable[,"xerror"]), 'CP']
+min_cp
+
+# Pruning tree using best cp
+tree.rp = prune(cv.rp, cp=min_cp)
+fancyRpartPlot(tree.rp)
+```
+
+```{r}
+# Prediction on test data
+train.class = predict(tree.rp, newdata=train, type="class")
+train.prob = predict(tree.rp, newdata=train, type="prob")
+test.class = predict(tree.rp, newdata=test, type="class")
+test.prob = predict(tree.rp, newdata=test, type="prob")
+
+# Training Confussion Matrix
+# caret::confusionMatrix(train.class, train$y)
+caret::confusionMatrix(test.class, test$y)
+
+# ROC
+train.roc = pROC::roc(train$y~train.prob[,2], plot = T, print.auc = T)
+tree.test.roc = pROC::roc(test$y~test.prob[,2], percent = TRUE, plot = T, print.auc = T)
+
+# AUC
+train.roc$auc
+tree.test.roc$auc
+```
+
+# Random forest
+```{r}
+fData <- read.csv("./data/bank-additional-full.csv")
+```
+
+```{r}
+# Data munging
+fData$job = as.factor(fData$job)
+fData$education = as.factor(fData$education)
+fData$contact = as.factor(fData$contact)
+fData$marital = as.factor(fData$marital)
+fData$default = as.factor(fData$default)
+fData$housing = as.factor(fData$housing)
+fData$loan = as.factor(fData$loan)
+fData$month = as.factor(fData$month)
+fData$day_of_week = as.factor(fData$day_of_week)
+fData$poutcome = as.factor(fData$poutcome)
+fData$y = as.factor(fData$y)
+```
+
+```{r}
+# Split into training and testing sets
+partition <- createDataPartition(fData$y, p = 0.7, list = FALSE)
+fData.train2 <- fData[partition, ]
+fData.test2 <- fData[-partition, ]
+
+table(fData.train2$y)
+table(fData.test2$y)
+```
+
+```{r}
+# Balanced RF
+# Compute weights to balance the RF
+w <- 1/table(fData.train2$y)
+w <- w/sum(w)
+weights <- rep(0, nrow(fData.train2))
+weights[fData.train2$y == "yes"] <- w['yes']
+weights[fData.train2$y == "no"] <- w['no']
+table(weights, fData.train2$y)
+
+# Use tree data
+#################
+fData.train2 <- train
+fData.test2 <- test
+#################
+
+# Fit the RF
+rf.raw <- ranger(y~., data=fData.train2, mtry=4, importance = 'impurity')
+# rf.raw <- ranger(y~., data=fData.train2, case.weights=weights, importance = 'impurity')
+rf.balancedModel <- ranger(y~., data=fData.train2, case.weights=weights, probability = TRUE, importance = 'impurity')
+print(rf.balancedModel)
+
+# Test model accuracy
+pred = predict(rf.raw, fData.test2, type="response")
+caret::confusionMatrix(pred$predictions, fData.test2$y)
+rf_roc = pROC::roc(fData.test2$y ~ predict(rf.balancedModel, fData.test2)$prediction[,1], percent = TRUE, plot=TRUE, print.auc=TRUE)
+rf_roc$auc
+```
+
+```{r}
+# Plot feature importance: Log Reg
+
+
+# Plot feature importance: Tree
+varImp.tree <- tree.rp$variable.importance
+imp.tree <- data.frame(Features=names(varImp.tree), Importance=varImp.tree, row.names=NULL)
+ggplot(imp.tree) +
+  geom_col(aes(x = reorder(Features, -Importance), y = Importance, fill = ..y..)) +
+  scale_fill_gradient2(low = '#f8b4b9', high = '#c1121f', mid = '#ee4450', midpoint = 10) +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 6, angle = 45),
+        plot.title = element_text(size = 12, face = 'bold', hjust = 0.5),
+        axis.title.x = element_text(margin = ggplot2::margin(t = -18, r = 0, b = 0, l = 0)),
+        legend.position = 'none',
+        plot.margin = ggplot2::margin(r = 15, l = 10, t = 15, b = 6)) +
+  labs(title = 'Decision tree', x = 'Features')
+ggsave("tree-importance.png", width=1400, height=865, limitsize = FALSE, units = "px")
+
+# Plot feature importance: RF
+varImp <- rf.balancedModel$variable.importance
+imp <- data.frame(Features=names(varImp), Importance=varImp, row.names=NULL)
+ggplot(imp) +
+  geom_col(aes(x = reorder(Features, -Importance), y = Importance, fill = ..y..)) +
+  scale_fill_gradient2(low = '#f8b4b9', high = '#c1121f', mid = '#ee4450', midpoint = 10) +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 6, angle = 45),
+        plot.title = element_text(size = 12, face = 'bold', hjust = 0.5),
+        axis.title.x = element_text(margin = ggplot2::margin(t = -18, r = 0, b = 0, l = 0)),
+        legend.position = 'none',
+        plot.margin = ggplot2::margin(r = 15, l = 10, t = 15, b = 6)) +
+  labs(title = 'Random Forest', x = 'Features')
+ggsave("rf-importance.png", width=1400, height=865, limitsize = FALSE, units = "px")
+```
+
+```{r}
+# Plot ROC curves -v1
+roc_lr <- roc_lr_w$auc
+roc_rf <- rf_roc$auc
+roc_tree <- tree.test.roc$auc
+
+pROC::ggroc(list(roc_lr_w, tree.test.roc, rf_roc), linetype=1, lwd=0.8)+
+  theme_bw() +
+  theme(text=element_text(size=13))+
+  ggtitle("ROC Curves for All Models")+
+  scale_color_discrete(name="Model",
+                       labels=c(sprintf("Logistic regression: AUC-ROC = %.1f%%", roc_lr),
+                                sprintf("Decision tree: AUC-ROC = %.1f%%", roc_tree),
+                                sprintf("Random forest: AUC-ROC = %.1f%%", roc_rf)))+
+  labs(x="Specificity (%)", y = 'Sensitivity (%)')
+ggsave("roc-1.png", width=11.32/1.6, height=7/1.6, units = "in")
+```
+
+```{r}
+# Plot ROC curves -v2
+roc_lr <- roc_lr_w$auc
+roc_rf <- rf_roc$auc
+roc_tree <- tree.test.roc$auc
+
+png(
+  "roc-2.png",
+  width     = 3.25,
+  height    = 3.25,
+  units     = "in",
+  res       = 1200,
+  pointsize = 6
+)
+
+plot.roc(fData.test2$y, predict(rf.balancedModel, fData.test2)$prediction[,1], percent = TRUE, main = "ROC curves", add =  FALSE, asp = NA, print.auc = F)
+lines(tree.test.roc, type = "l", lty = 2, col = "grey35")
+lines(roc_lr_w, type = "l", lty = 3, col = "grey48")
+
+legend("bottomright", 
+       legend = c(sprintf("Logistic regression: AUC-ROC = %.1f%%", roc_lr),
+                  sprintf("Decision tree: AUC-ROC = %.1f %%", roc_tree),
+                  sprintf("Random forest: AUC-ROC = %.1f%%", roc_rf)), 
+       col = c("grey48", "grey35", "black"),
+       lty = c(3, 2, 1),
+       lwd = c(1, 1, 1))
+
+dev.off()
+```
